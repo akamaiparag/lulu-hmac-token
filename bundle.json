@@ -1,0 +1,10 @@
+{
+    "edgeworker-version": "1.5",
+    "description" : "HMAC Authentication Edgeworker",
+    "config": {
+    "logging": {
+        "level":"warn",
+        "schema": "v1"
+    }
+  }
+}
