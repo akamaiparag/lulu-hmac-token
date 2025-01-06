@@ -18,15 +18,25 @@ async function forwardRequest(request) {
   return createResponse(response.status, getSafeResponseHeaders(response.headers), response.body);
 }
 
-function generateHMAC(secretKey, message) {
-  try {
-    const hmac = createHmac('sha256', secretKey);
-    hmac.update(message);
-    return hmac.digest('base64');
-  } catch (error) {
-    console.error("Error generating HMAC:", error);
-    throw error;
-  }
+async function generateHMAC(secretKey, message) {
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(secretKey);
+  const messageData = encoder.encode(message);
+
+  // Import the secret key for HMAC
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    keyData,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  // Generate the HMAC
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, messageData);
+
+  // Convert ArrayBuffer to Base64
+  return btoa(String.fromCharCode(...new Uint8Array(signature)));
 }
 
 function createMessageToSign(item) {
