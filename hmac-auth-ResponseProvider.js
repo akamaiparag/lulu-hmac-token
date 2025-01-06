@@ -1,47 +1,55 @@
 import { createResponse } from 'create-response';
 import { httpRequest } from 'http-request';
 
-// Function to verify HMAC
-async function verifyHmac(secretKey, message, providedHmacToken) {
-  // Convert secret and message to ArrayBuffer
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(secretKey);
-  const messageData = encoder.encode(message);
 
-  // Import the key for HMAC
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    keyData,
-    { name: "HMAC", hash: { name: "SHA-256" } },
-    false,
-    ["sign"]
-  );
 
-  // Compute the HMAC for the message
-  const computedHmac = await crypto.subtle.sign("HMAC", cryptoKey, messageData);
+// Akamai EdgeWorkers implementation to validate HMAC token
+import { createHmac } from 'crypto';
 
-  // Convert both HMACs to hex for comparison
-  const computedHmacHex = Array.from(new Uint8Array(computedHmac))
-    .map(byte => byte.toString(16).padStart(2, "0"))
-    .join("");
-
-  // Perform a secure comparison of the provided HMAC and computed HMAC
-  return timingSafeCompare(providedHmacToken, computedHmacHex);
+//Forward valid HMAC request to origin
+async function forwardRequest(request) {
+  const url = `https://${request.host}${request.url}`;
+  const opt = {
+    "method": "POST",
+    "body": request.body.pipeThrough(new TextEncoderStream()),
+    "headers":request.getHeaders()
+  }
+  let response = await httpRequest(url, opt);
+  return createResponse(response.status, getSafeResponseHeaders(response.headers), response.body);
 }
 
-// Secure comparison to prevent timing attacks
-function timingSafeCompare(a, b) {
-  if (a.length !== b.length) {
-    return false; // Length mismatch, cannot be equal
+function generateHMAC(secretKey, message) {
+  try {
+    const hmac = createHmac('sha256', secretKey);
+    hmac.update(message);
+    return hmac.digest('base64');
+  } catch (error) {
+    console.error("Error generating HMAC:", error);
+    throw error;
   }
-
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i); // XOR comparison
-  }
-  return true;
 }
 
+function createMessageToSign(item) {
+  const pspReference = item.pspReference || "";
+  const originalReference = ""; // Not present in the provided JSON
+  const merchantAccountCode = item.merchantAccountCode || "";
+  const merchantReference = item.merchantReference || "";
+  const amountValue = item.amount.value || "";
+  const amountCurrency = item.amount.currency || "";
+  const eventCode = item.eventCode || "";
+  const success = item.success || "";
+
+  return [
+    pspReference,
+    originalReference,
+    merchantAccountCode,
+    merchantReference,
+    amountValue,
+    amountCurrency,
+    eventCode,
+    success
+  ].join(":");
+}
 
 export async function responseProvider(request) {
     try {
@@ -85,9 +93,20 @@ export async function responseProvider(request) {
         console.log('Extracted HMAC Token:', hmacToken);
 
         const secretKey = 'C10F05E72121FF24810D3E72984FB07615B48BDF1C66DD6E5B11BACEB47C38E'; // Replace with your actual secret key
+        // Now Compute the HMAC Token based on the sent message.
+
+        //First contruct  the message
+        const item = jsonBody.notificationItems[0]?.NotificationRequestItem;
+
+         // Generate the message to be signed
+         const message = createMessageToSign(item);
+
+        // Generate HMAC using the secret key
+        const generatedHmac = generateHMAC(secretKey, message);
+
 
         // Usage
-        if (verifyHmac(secretKey, body, providedHmacToken)) {
+        if (generatedHmac === providedHmacToken) {
           console.log("The HMAC token is valid.");
           return forwardRequest(body, request);
         } else {
